@@ -1,0 +1,11 @@
+[package]
+name = "itsfrank/frkcli"
+description = "Simple cli arg parsing library"
+version = "0.0.1"
+license = "MIT"
+authors = ["Francis O'Brien <github.com/itsfrank>"]
+registry = "https://github.com/upliftgames/wally-index"
+# not really relevant here since this is intended for lune...
+realm = "shared"
+
+[dependencies]
