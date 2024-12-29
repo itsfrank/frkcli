@@ -184,7 +184,6 @@ function M.new_subcommands(name, description: string?, helpkeys: { string }?)
     end
 
     function cli:help(indent: number?): string
-        -- usage
         local help_sections: { HelpSection } = {}
 
         table.insert(help_sections, { title = `usage: {cli.name} <command>` })
@@ -207,7 +206,7 @@ function M.new_subcommands(name, description: string?, helpkeys: { string }?)
             lines = subcommand_lines,
         })
 
-        return make_help(help_sections)
+        return make_help(help_sections, indent)
     end
 
     return cli
@@ -454,18 +453,7 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
             return aligned_rows
         end
 
-        local function append_list<T>(dest: { T }, src: { T })
-            for _, v in src do
-                table.insert(dest, v)
-            end
-        end
-
-        local ind = "  "
-        if indent ~= nil then
-            ind = string.rep(" ", indent)
-        end
-
-        local help_lines: { { string } } = {}
+        local help_sections: { HelpSection } = {}
 
         -- usage
         local usage = `usage: {cli.name}`
@@ -479,13 +467,12 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
                 usage ..= ` [{arg.name}]`
             end
         end
-        table.insert(help_lines, { usage })
+
+        table.insert(help_sections, { title = usage })
 
         -- description
         if cli.description ~= nil then
-            table.insert(help_lines, {})
-            table.insert(help_lines, { "description:" })
-            table.insert(help_lines, { ind, cli.description })
+            table.insert(help_sections, { title = "description:", lines = { cli.description } })
         end
 
         local function make_arg_line(arg: ArgData): { string }
@@ -516,47 +503,37 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
                 help ..= arg.options.help
             end
 
-            return { ind, keys, reqdef, help }
+            return { keys, reqdef, help }
         end
 
         -- positionals
         if #cli._positionals > 0 then
-            table.insert(help_lines, {})
-            table.insert(help_lines, { "positional arguments:" })
             local positional_lines: { { string } } = {}
             for _, arg in cli._positionals do
                 table.insert(positional_lines, make_arg_line(arg))
             end
-            append_list(help_lines, align_cols(positional_lines))
+            table.insert(help_sections, { title = "positional arguments:", lines = positional_lines })
         end
 
         -- flags
         if #cli._flags > 0 then
-            table.insert(help_lines, {})
-            table.insert(help_lines, { "flags:" })
             local flag_lines: { { string } } = {}
             for _, arg in cli._flags do
                 table.insert(flag_lines, make_arg_line(arg))
             end
-            append_list(help_lines, align_cols(flag_lines))
+            table.insert(help_sections, { title = "flags:", lines = flag_lines })
         end
 
         -- options
         if #cli._options > 0 then
-            table.insert(help_lines, {})
-            table.insert(help_lines, { "options:" })
             local option_lines: { { string } } = {}
             for _, arg in cli._options do
                 table.insert(option_lines, make_arg_line(arg))
             end
-            append_list(help_lines, align_cols(option_lines))
+            table.insert(help_sections, { title = "options:", lines = option_lines })
         end
 
-        local help_text = ""
-        for _, line in help_lines do
-            help_text ..= table.concat(line, " ") .. "\n"
-        end
-        return help_text
+        return make_help(help_sections, indent)
     end
 
     return cli
