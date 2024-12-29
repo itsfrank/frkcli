@@ -29,31 +29,197 @@ type ParseResult = {
     flags: { [string]: boolean },
 }
 
+type SubcommandParseResult = {
+    command: string,
+    result: ParseResult,
+}
+
 local DEFAULT_OPTIONS: ArgOptionsSafe = {
     help = "",
     default = nil,
     aliases = {},
 }
 
-local DEFAULT_HELP_SET = {
+local DEFAULT_helpset = {
     ["-h"] = true,
     ["--help"] = true,
 }
 
-local function validateKeyOrError(key: string)
+local function validate_key_or_error(key: string)
     if (key:sub(1, 2) == "--" or key:sub(1, 1) == "-") and not key:find(" ") then
         return
     end
     error(`arg key {key} is invalid. Keys must start with either '-' or '--' and may not contain spaces`)
 end
 
-function M.new(name: string, description: string?, helpKeys: { string }?)
+local function validate_subcommand_name_or_error(name: string)
+    if name:sub(1, 2) == "--" or name:sub(1, 1) == "-" or name:find(" ") then
+        error(`subcommand name '{name}' is invalid. Name must not start with '-' or '--' and may not contain spaces`)
+    end
+end
+
+type HelpSection = { title: string, lines: { { string } | string }? }
+local function make_help(sections: { HelpSection }, indent: number?): string
+    local function align_cols(rows: { { string } }, sep: string?): { { string } }
+        local sep = if sep == nil then " " else sep
+        local max_col_lengths: { number } = {}
+        for _, row in rows do
+            for i, s in row do
+                if max_col_lengths[i] == nil or s:len() > max_col_lengths[i] then
+                    max_col_lengths[i] = s:len()
+                end
+            end
+        end
+        local aligned_rows: { { string } } = {}
+        for _, row in rows do
+            local line: { string } = {}
+            for i, col in row do
+                table.insert(line, col)
+                if i < #row then
+                    local spacing = sep
+                    local diff = max_col_lengths[i] - col:len()
+                    if diff > 0 then
+                        spacing = string.rep(" ", diff) .. sep
+                    end
+                    table.insert(line, spacing)
+                end
+            end
+            table.insert(aligned_rows, line)
+        end
+        return aligned_rows
+    end
+
+    local function append_list<T>(dest: { T }, src: { T })
+        for _, v in src do
+            table.insert(dest, v)
+        end
+    end
+
+    local ind = "  "
+    if indent ~= nil then
+        ind = string.rep(" ", indent)
+    end
+
+    local help_lines: { { string } } = {}
+
+    for _, s in sections do
+        table.insert(help_lines, { s.title })
+        if s.lines ~= nil then
+            local section_lines: { { string } } = {}
+            for _, l in s.lines do
+                if typeof(l) == "string" then
+                    table.insert(section_lines, { ind, l })
+                else
+                    table.insert(section_lines, { ind, table.unpack(l) })
+                end
+            end
+            append_list(help_lines, align_cols(section_lines))
+        end
+        table.insert(help_lines, {})
+    end
+
+    -- remove last empty line
+    table.remove(help_lines)
+
+    local help_text = ""
+    for _, line in help_lines do
+        help_text ..= table.concat(line, " ") .. "\n"
+    end
+    return help_text
+end
+-- subcommand cli, must be first positional arg
+function M.new_subcommands(name, description: string?, helpkeys: { string }?)
     -- args that trigger print help + abort
-    local helpSet: { [string]: boolean } = DEFAULT_HELP_SET
-    if helpKeys ~= nil then
-        helpSet = {}
-        for _, k in helpKeys do
-            helpSet[k] = true
+    local helpset: { [string]: boolean } = DEFAULT_helpset
+    if helpkeys ~= nil then
+        helpset = {}
+        for _, k in helpkeys do
+            helpset[k] = true
+        end
+    end
+
+    local cli = {}
+    cli.name = name
+    cli.description = description
+    cli._helpkeys = helpkeys
+    cli._helpset = helpset
+    cli._subcommands = {}
+
+    function cli:add_subcommand(name: string, description: string?)
+        validate_subcommand_name_or_error(name)
+        local sc = M.new(name, description, cli._helpkeys)
+        cli._subcommands[name] = sc
+        return sc
+    end
+
+    function cli:parse(args: { string }): (SubcommandParseResult?, string?)
+        if #args == 0 then
+            return nil, "insufficient arguments, required at least 1, got 0"
+        end
+        local command = args[1]
+        assert(command ~= nil)
+
+        -- asking for help?
+        if cli._helpset[command] ~= nil then
+            print(cli:help())
+            process.exit(0)
+        end
+
+        local subcommand = cli._subcommands[command]
+        if subcommand == nil then
+            return nil, `'{command} is not a valid subcommand`
+        end
+
+        local sub_args = { table.unpack(args, 2) }
+        local res, err = subcommand:parse(sub_args)
+        if err ~= nil then
+            return nil, err
+        end
+        assert(res ~= nil)
+
+        return {
+            command = command,
+            result = res,
+        }, nil
+    end
+
+    function cli:help(indent: number?): string
+        -- usage
+        local help_sections: { HelpSection } = {}
+
+        table.insert(help_sections, { title = `usage: {cli.name} <command>` })
+
+        if cli.description ~= nil then
+            table.insert(help_sections, {
+                title = "description:",
+                lines = { { cli.description } },
+            })
+        end
+
+        local subcommand_lines = {}
+        for _, c in cli._subcommands do
+            local desc = if c.description then c.description else ""
+            table.insert(subcommand_lines, { c.name, desc })
+        end
+
+        table.insert(help_sections, {
+            title = "commands:",
+            lines = subcommand_lines,
+        })
+
+        return make_help(help_sections)
+    end
+
+    return cli
+end
+
+function M.new(name: string, description: string?, helpkeys: { string }?)
+    -- args that trigger print help + abort
+    local helpset: { [string]: boolean } = DEFAULT_helpset
+    if helpkeys ~= nil then
+        helpset = {}
+        for _, k in helpkeys do
+            helpset[k] = true
         end
     end
 
@@ -61,37 +227,37 @@ function M.new(name: string, description: string?, helpKeys: { string }?)
     local cli = {}
     cli.name = name
     cli.description = description
-    cli._helpSet = helpSet
+    cli._helpset = helpset
     cli._positionals = {} :: { ArgData }
     cli._flags = {} :: { ArgData }
     cli._options = {} :: { ArgData }
-    cli._nameSet = {} :: { [string]: boolean }
-    cli._requiredList = {} :: { string }
+    cli._name_set = {} :: { [string]: boolean }
+    cli._required_list = {} :: { string }
     cli._lookup = {} :: { [string]: ArgData }
-    cli._requiredPositionalCount = 0
-    cli._defaultResult = { values = {}, flags = {} } :: ParseResult
+    cli._required_positional_count = 0
+    cli._default_result = { values = {}, flags = {} } :: ParseResult
 
-    local function addArgLookups(keys: { string }, argData: ArgData)
+    local function add_arg_lookups(keys: { string }, arg_data: ArgData)
         for _, k in keys do
-            if cli._helpSet[k] ~= nil then
+            if cli._helpset[k] ~= nil then
                 error(`key '{k}' is already used as a help key.`)
             end
-            validateKeyOrError(k)
+            validate_key_or_error(k)
             if cli._lookup[k] ~= nil then
                 error(`key '{k}' already exists.`)
             end
-            cli._lookup[k] = argData
+            cli._lookup[k] = arg_data
         end
     end
 
-    local function addNameErrorOnDuplicate(name: string)
-        if cli._nameSet[name] ~= nil then
+    local function add_name_error_on_duplicate(name: string)
+        if cli._name_set[name] ~= nil then
             error(`arg with name {name} already exists`)
         end
-        cli._nameSet[name] = true
+        cli._name_set[name] = true
     end
 
-    local function makseSafeOptions(options: ArgOptions?): ArgOptionsSafe
+    local function makse_safe_options(options: ArgOptions?): ArgOptionsSafe
         if options == nil then
             return DEFAULT_OPTIONS
         end
@@ -102,15 +268,15 @@ function M.new(name: string, description: string?, helpKeys: { string }?)
         return options :: ArgOptionsSafe
     end
 
-    function cli:addPositional(name: string, options: ArgOptions?)
-        local options = makseSafeOptions(options)
+    function cli:add_positional(name: string, options: ArgOptions?)
+        local options = makse_safe_options(options)
 
-        local argData: ArgData = {
+        local arg_data: ArgData = {
             name = name,
             kind = "POSITIONAL",
             options = options,
         }
-        addNameErrorOnDuplicate(name)
+        add_name_error_on_duplicate(name)
         if options.default == nil then
             -- check positional required ordering, can't have a required pos after an optional one
             local last = cli._positionals[#cli._positionals]
@@ -120,57 +286,57 @@ function M.new(name: string, description: string?, helpKeys: { string }?)
                 )
             end
 
-            table.insert(cli._requiredList, name)
+            table.insert(cli._required_list, name)
         else
-            cli._defaultResult.values[name] = options.default
+            cli._default_result.values[name] = options.default
         end
-        table.insert(cli._positionals, argData)
+        table.insert(cli._positionals, arg_data)
     end
 
-    function cli:addFlag(name: string, options: ArgOptions?)
+    function cli:add_flag(name: string, options: ArgOptions?)
         if options and options.default ~= nil then
             -- these are called constants :)
             error(`flag {name} has non nil default, default value is not supported for flags`)
         end
 
-        local options = makseSafeOptions(options)
+        local options = makse_safe_options(options)
 
-        local argData: ArgData = {
+        local arg_data: ArgData = {
             name = name,
             kind = "FLAG",
             options = options,
         }
-        addNameErrorOnDuplicate(name)
-        addArgLookups({ "--" .. name, table.unpack(options.aliases) }, argData)
+        add_name_error_on_duplicate(name)
+        add_arg_lookups({ "--" .. name, table.unpack(options.aliases) }, arg_data)
 
         if options.default ~= nil then
             error(`flag {name} has non nil default value, defaults are not supported for flag args`)
         end
 
-        cli._defaultResult.flags[name] = false
-        table.insert(cli._flags, argData)
+        cli._default_result.flags[name] = false
+        table.insert(cli._flags, arg_data)
     end
 
-    function cli:addOption(name: string, options: ArgOptions?)
-        local options = makseSafeOptions(options)
+    function cli:add_option(name: string, options: ArgOptions?)
+        local options = makse_safe_options(options)
 
-        local argData: ArgData = {
+        local arg_data: ArgData = {
             name = name,
             kind = "OPTION",
             options = options,
         }
-        addNameErrorOnDuplicate(name)
-        addArgLookups({ "--" .. name, table.unpack(options.aliases) }, argData)
+        add_name_error_on_duplicate(name)
+        add_arg_lookups({ "--" .. name, table.unpack(options.aliases) }, arg_data)
         if options.default == nil then
-            table.insert(cli._requiredList, name)
+            table.insert(cli._required_list, name)
         else
             if options.default == nil then
                 error(`optional arg {name} must have a default value`)
             end
             assert(options.default ~= nil)
-            cli._defaultResult.values[name] = options.default
+            cli._default_result.values[name] = options.default
         end
-        table.insert(cli._options, argData)
+        table.insert(cli._options, arg_data)
     end
 
     -- return: data, err - where data is a table, and err is a string
@@ -179,50 +345,51 @@ function M.new(name: string, description: string?, helpKeys: { string }?)
     function cli:parse(args: { string }): (ParseResult?, string?)
         local parsed: ParseResult = { values = {}, flags = {} } :: ParseResult
 
-        local positionalIdx = 1
-        local skipNext = false -- used for options
+        local positional_idx = 1
+        local skip_next = false -- used for options
         for i, arg in args do
             -- asking for help?
-            if cli._helpSet[arg] ~= nil then
+            if cli._helpset[arg] ~= nil then
                 print(cli:help())
                 process.exit(0)
             end
 
-            if skipNext then
-                skipNext = false
+            if skip_next then
+                skip_next = false
                 continue
             end
 
-            local hasDash = arg:sub(1, 1) == "-"
-            local argData: ArgData? = nil
+            local has_dash = arg:sub(1, 1) == "-"
+            local arg_data: ArgData? = nil
             local value: string? = nil
 
-            if not hasDash then -- positional
-                if positionalIdx > #cli._positionals then
+            if not has_dash then -- positional
+                if positional_idx > #cli._positionals then
                     return nil, `too many positional arguments, expected {#cli._positionals}.`
                 end
-                argData = cli._positionals[positionalIdx]
+                arg_data = cli._positionals[positional_idx]
+                positional_idx += 1
                 value = arg
             else -- flag or option
-                argData = cli._lookup[arg]
+                arg_data = cli._lookup[arg]
             end
 
-            if argData == nil then
+            if arg_data == nil then
                 return nil, `unknown flag or option: '{arg}'`
             end
-            assert(argData ~= nil)
+            assert(arg_data ~= nil)
 
             -- handle flags early
-            if argData.kind == "FLAG" then
-                parsed.flags[argData.name] = true
+            if arg_data.kind == "FLAG" then
+                parsed.flags[arg_data.name] = true
                 continue
             end
 
             -- get option value
-            if argData.kind == "OPTION" then
+            if arg_data.kind == "OPTION" then
                 if i < #args then
                     value = args[i + 1]
-                    skipNext = true
+                    skip_next = true
                 end
             end
 
@@ -232,23 +399,23 @@ function M.new(name: string, description: string?, helpKeys: { string }?)
             end
             assert(value ~= nil)
 
-            parsed.values[argData.name] = value
+            parsed.values[arg_data.name] = value
         end
 
         -- check all required options are provided
-        for _, name in cli._requiredList do
+        for _, name in cli._required_list do
             if parsed.values[name] == nil and parsed.flags[name] == nil then
                 return nil, `required arg '{name}' was not found`
             end
         end
 
         -- apply defaults for missing optional
-        for k, v in cli._defaultResult.flags do
+        for k, v in cli._default_result.flags do
             if parsed.flags[k] == nil then
                 parsed.flags[k] = v
             end
         end
-        for k, v in cli._defaultResult.values do
+        for k, v in cli._default_result.values do
             if parsed.values[k] == nil then
                 parsed.values[k] = v
             end
@@ -258,36 +425,36 @@ function M.new(name: string, description: string?, helpKeys: { string }?)
     end
 
     function cli:help(indent: number?): string
-        local function alignCols(rows: { { string } }, sep: string?): { { string } }
+        local function align_cols(rows: { { string } }, sep: string?): { { string } }
             local sep = if sep == nil then " " else sep
-            local maxColLengths: { number } = {}
+            local max_col_lengths: { number } = {}
             for _, row in rows do
                 for i, s in row do
-                    if maxColLengths[i] == nil or s:len() > maxColLengths[i] then
-                        maxColLengths[i] = s:len()
+                    if max_col_lengths[i] == nil or s:len() > max_col_lengths[i] then
+                        max_col_lengths[i] = s:len()
                     end
                 end
             end
-            local alignedRows: { { string } } = {}
+            local aligned_rows: { { string } } = {}
             for _, row in rows do
                 local line: { string } = {}
                 for i, col in row do
                     table.insert(line, col)
                     if i < #row then
                         local spacing = sep
-                        local diff = maxColLengths[i] - col:len()
+                        local diff = max_col_lengths[i] - col:len()
                         if diff > 0 then
                             spacing = string.rep(" ", diff) .. sep
                         end
                         table.insert(line, spacing)
                     end
                 end
-                table.insert(alignedRows, line)
+                table.insert(aligned_rows, line)
             end
-            return alignedRows
+            return aligned_rows
         end
 
-        local function appendList<T>(dest: { T }, src: { T })
+        local function append_list<T>(dest: { T }, src: { T })
             for _, v in src do
                 table.insert(dest, v)
             end
@@ -298,7 +465,7 @@ function M.new(name: string, description: string?, helpKeys: { string }?)
             ind = string.rep(" ", indent)
         end
 
-        local helpLines: { { string } } = {}
+        local help_lines: { { string } } = {}
 
         -- usage
         local usage = `usage: {cli.name}`
@@ -312,16 +479,16 @@ function M.new(name: string, description: string?, helpKeys: { string }?)
                 usage ..= ` [{arg.name}]`
             end
         end
-        table.insert(helpLines, { usage })
+        table.insert(help_lines, { usage })
 
         -- description
         if cli.description ~= nil then
-            table.insert(helpLines, {})
-            table.insert(helpLines, { "description:" })
-            table.insert(helpLines, { ind, cli.description })
+            table.insert(help_lines, {})
+            table.insert(help_lines, { "description:" })
+            table.insert(help_lines, { ind, cli.description })
         end
 
-        local function makeArgLine(arg: ArgData): { string }
+        local function make_arg_line(arg: ArgData): { string }
             local keys = arg.name
             if arg.kind ~= "POSITIONAL" then
                 keys = `--{arg.name}`
@@ -354,42 +521,42 @@ function M.new(name: string, description: string?, helpKeys: { string }?)
 
         -- positionals
         if #cli._positionals > 0 then
-            table.insert(helpLines, {})
-            table.insert(helpLines, { "positional arguments:" })
-            local positionalLines: { { string } } = {}
+            table.insert(help_lines, {})
+            table.insert(help_lines, { "positional arguments:" })
+            local positional_lines: { { string } } = {}
             for _, arg in cli._positionals do
-                table.insert(positionalLines, makeArgLine(arg))
+                table.insert(positional_lines, make_arg_line(arg))
             end
-            appendList(helpLines, alignCols(positionalLines))
+            append_list(help_lines, align_cols(positional_lines))
         end
 
         -- flags
         if #cli._flags > 0 then
-            table.insert(helpLines, {})
-            table.insert(helpLines, { "flags:" })
-            local flagLines: { { string } } = {}
+            table.insert(help_lines, {})
+            table.insert(help_lines, { "flags:" })
+            local flag_lines: { { string } } = {}
             for _, arg in cli._flags do
-                table.insert(flagLines, makeArgLine(arg))
+                table.insert(flag_lines, make_arg_line(arg))
             end
-            appendList(helpLines, alignCols(flagLines))
+            append_list(help_lines, align_cols(flag_lines))
         end
 
         -- options
         if #cli._options > 0 then
-            table.insert(helpLines, {})
-            table.insert(helpLines, { "options:" })
-            local optionLines: { { string } } = {}
+            table.insert(help_lines, {})
+            table.insert(help_lines, { "options:" })
+            local option_lines: { { string } } = {}
             for _, arg in cli._options do
-                table.insert(optionLines, makeArgLine(arg))
+                table.insert(option_lines, make_arg_line(arg))
             end
-            appendList(helpLines, alignCols(optionLines))
+            append_list(help_lines, align_cols(option_lines))
         end
 
-        local helpText = ""
-        for _, line in helpLines do
-            helpText ..= table.concat(line, " ") .. "\n"
+        local help_text = ""
+        for _, line in help_lines do
+            help_text ..= table.concat(line, " ") .. "\n"
         end
-        return helpText
+        return help_text
     end
 
     return cli

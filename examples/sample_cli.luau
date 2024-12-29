@@ -3,23 +3,25 @@ local process = require("@lune/process")
 
 local cli = frkcli.new("sample_cli", "An exmaple cli using frkcli")
 
-cli:addPositional("p1", {
+cli:add_positional("p1", {
     help = "A positional arg",
 })
-cli:addPositional("p2", {
+
+cli:add_positional("p2", {
     help = "A positional arg, that is optional",
     required = false,
     default = "hello",
 })
 
-cli:addFlag("foo", {
+cli:add_flag("foo", {
     aliases = { "-f" },
 })
 
-cli:addOption("opt", {
+cli:add_option("opt", {
     help = "an option",
 })
-cli:addOption("optopt", {
+
+cli:add_option("optopt", {
     help = "an optional option",
     required = false,
     default = "goodbye",
