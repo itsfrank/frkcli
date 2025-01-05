@@ -27,6 +27,7 @@ type ArgData = {
 type ParseResult = {
     values: { [string]: string },
     flags: { [string]: boolean },
+    fwd_args: { string }, -- all args after `--`
 }
 
 type SubcommandParseResult = {
@@ -342,7 +343,7 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
     -- errors early, first encountered error ends the parse
     -- if a help key is found will print help text and exit the process
     function cli:parse(args: { string }): (ParseResult?, string?)
-        local parsed: ParseResult = { values = {}, flags = {} } :: ParseResult
+        local parsed: ParseResult = { values = {}, flags = {}, fwd_args = {} } :: ParseResult
 
         local positional_idx = 1
         local skip_next = false -- used for options
@@ -356,6 +357,12 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
             if skip_next then
                 skip_next = false
                 continue
+            end
+
+            -- rest of args should be fwd args
+            if arg == "--" then
+                parsed.fwd_args = { table.unpack(args, i + 1) }
+                break
             end
 
             local has_dash = arg:sub(1, 1) == "-"
