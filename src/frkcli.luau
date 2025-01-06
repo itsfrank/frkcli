@@ -231,7 +231,7 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
     cli._positionals = {} :: { ArgData }
     cli._flags = {} :: { ArgData }
     cli._options = {} :: { ArgData }
-    cli._name_set = {} :: { [string]: boolean }
+    cli._argdata_set = {} :: { [string]: ArgData }
     cli._required_list = {} :: { string }
     cli._lookup = {} :: { [string]: ArgData }
     cli._required_positional_count = 0
@@ -250,14 +250,14 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
         end
     end
 
-    local function add_name_error_on_duplicate(name: string)
-        if cli._name_set[name] ~= nil then
+    local function add_name_error_on_duplicate(name: string, data: ArgData)
+        if cli._argdata_set[name] ~= nil then
             error(`arg with name {name} already exists`)
         end
-        cli._name_set[name] = true
+        cli._argdata_set[name] = data
     end
 
-    local function makse_safe_options(options: ArgOptions?): ArgOptionsSafe
+    local function make_safe_options(options: ArgOptions?): ArgOptionsSafe
         if options == nil then
             return DEFAULT_OPTIONS
         end
@@ -268,15 +268,35 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
         return options :: ArgOptionsSafe
     end
 
+    -- return is guaranteed to start with at least one '-', if none, adds '--'
+    local function to_lookup_name(name: string): string
+        if name:sub(1, 1) == "-" then
+            return name
+        end
+        return "--" .. name
+    end
+
+    -- return is guaranted to not start with '-'
+    local function to_result_name(name: string): string
+        while name:sub(1, 1) == "-" do
+            name = name:sub(2, -1)
+        end
+        return name
+    end
+
     function cli:add_positional(name: string, options: ArgOptions?)
-        local options = makse_safe_options(options)
+        if name:sub(1, 1) == "-" then
+            error(`invalid arg name '{name}', positional cannot start with dashes`)
+        end
+
+        local options = make_safe_options(options)
 
         local arg_data: ArgData = {
             name = name,
             kind = "POSITIONAL",
             options = options,
         }
-        add_name_error_on_duplicate(name)
+        add_name_error_on_duplicate(name, arg_data)
         if options.default == nil then
             -- check positional required ordering, can't have a required pos after an optional one
             local last = cli._positionals[#cli._positionals]
@@ -299,15 +319,21 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
             error(`flag {name} has non nil default, default value is not supported for flags`)
         end
 
-        local options = makse_safe_options(options)
+        local options = make_safe_options(options)
+
+        local lookup_name = to_lookup_name(name)
+        name = to_result_name(name)
+        for i, v in options.aliases do
+            options.aliases[i] = to_lookup_name(v)
+        end
 
         local arg_data: ArgData = {
             name = name,
             kind = "FLAG",
             options = options,
         }
-        add_name_error_on_duplicate(name)
-        add_arg_lookups({ "--" .. name, table.unpack(options.aliases) }, arg_data)
+        add_name_error_on_duplicate(name, arg_data)
+        add_arg_lookups({ lookup_name, table.unpack(options.aliases) }, arg_data)
 
         if options.default ~= nil then
             error(`flag {name} has non nil default value, defaults are not supported for flag args`)
@@ -318,15 +344,21 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
     end
 
     function cli:add_option(name: string, options: ArgOptions?)
-        local options = makse_safe_options(options)
+        local options = make_safe_options(options)
+
+        local lookup_name = to_lookup_name(name)
+        name = to_result_name(name)
+        for i, v in options.aliases do
+            options.aliases[i] = to_lookup_name(v)
+        end
 
         local arg_data: ArgData = {
             name = name,
             kind = "OPTION",
             options = options,
         }
-        add_name_error_on_duplicate(name)
-        add_arg_lookups({ "--" .. name, table.unpack(options.aliases) }, arg_data)
+        add_name_error_on_duplicate(name, arg_data)
+        add_arg_lookups({ lookup_name, table.unpack(options.aliases) }, arg_data)
         if options.default == nil then
             table.insert(cli._required_list, name)
         else
@@ -411,7 +443,8 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
         -- check all required options are provided
         for _, name in cli._required_list do
             if parsed.values[name] == nil and parsed.flags[name] == nil then
-                return nil, `required arg '{name}' was not found`
+                local kind = cli._argdata_set[name].kind:lower()
+                return nil, `required {kind} arg '{name}' was not found`
             end
         end
 
@@ -545,5 +578,8 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
 
     return cli
 end
+
+export type Cli = typeof(M.new(""))
+export type CliSubcommands = typeof(M.new_subcommands(""))
 
 return M
