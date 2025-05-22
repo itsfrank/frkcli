@@ -153,7 +153,11 @@ function M.new_subcommands(name, description: string?, helpkeys: { string }?)
         return sc
     end
 
-    function cli:parse(args: { string }): (SubcommandParseResult?, string?)
+    function cli:parse(args_in: { string }): (SubcommandParseResult?, string?)
+        local args = {}
+        for _, v in args_in do
+            table.insert(args, v)
+        end
         if #args == 0 then
             return nil, "insufficient arguments, required at least 1, got 0"
         end
