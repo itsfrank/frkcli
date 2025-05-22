@@ -378,7 +378,11 @@ function M.new(name: string, description: string?, helpkeys: { string }?)
     -- return: data, err - where data is a table, and err is a string
     -- errors early, first encountered error ends the parse
     -- if a help key is found will print help text and exit the process
-    function cli:parse(args: { string }): (ParseResult?, string?)
+    function cli:parse(args_in: { string }): (ParseResult?, string?)
+        local args = {}
+        for _, v in args_in do
+            table.insert(args, v)
+        end
         local parsed: ParseResult = { values = {}, flags = {}, fwd_args = {} } :: ParseResult
 
         local positional_idx = 1
